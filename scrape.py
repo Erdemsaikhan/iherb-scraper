@@ -48,6 +48,29 @@ def log(*a):
     print(*a, flush=True)
 
 
+def acquire_single_instance_lock(out_dir: Path, shard: int):
+    """Stop two scrapers from running the SAME shard on one machine (which would
+    fight over the JSONL/log and waste work). Returns the open lock-file handle —
+    keep a reference alive for the whole process. Exits cleanly (code 0, so the
+    watchdog stops) if another instance already holds the lock. The OS releases the
+    lock automatically when the holder dies, so a crashed run never leaves it stuck."""
+    lock_path = out_dir / f"shard{shard}.lock"
+    lock_file = open(lock_path, "w")
+    try:
+        if os.name == "nt":
+            import msvcrt
+            msvcrt.locking(lock_file.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        log(f"Another scraper is already running for shard {shard} on this machine — "
+            f"exiting to avoid a duplicate.")
+        lock_file.close()
+        sys.exit(0)
+    return lock_file
+
+
 def load_done(path: Path) -> set[str]:
     done: set[str] = set()
     if path.exists():
@@ -208,6 +231,10 @@ def main() -> int:
 
     if not (0 <= args.shard < args.shards):
         ap.error("--shard must be in [0, --shards)")
+
+    out_dir = Path(args.out)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    _lock = acquire_single_instance_lock(out_dir, args.shard)  # keep ref alive  # noqa: F841
 
     try:
         return asyncio.run(run(args))

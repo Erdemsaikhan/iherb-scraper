@@ -4,3 +4,4 @@ pc2/
 *.log
 __pycache__/
 *.pyc
+*.lock
